@@ -27,16 +27,18 @@ HANZE_events <- read_csv("data/HANZE/v2.1/HANZE_events.csv")
 
 sf_nuts <- read_sf("data/NUTS/NUTS_RG_20M_2010_3035.shp/NUTS_RG_20M_2010_3035.shp")
 
-class(sf_nuts)
-sf_nuts$NUTS_ID
+# class(sf_nuts)
+# sf_nuts$NUTS_ID
 
 nuts <- 
   sf_nuts |> 
   as_tibble() |> 
   rename(region = NUTS_ID) |> 
-  select(region,LEVL_CODE, NAME_LATN)
+  select(region,LEVL_CODE, NAME_LATN, geometry)
 
-class(nuts)
+# nuts |> 
+#   filter(str_starts(region, "IT")) |> 
+#   view()
 
 # Prepare dataset ---------------------------------------------------------------------------------------------
 
@@ -46,8 +48,8 @@ ESS <- bind_rows(ESS10, ESS8)
 
 ESS_prepared <-
   left_join(x=ESS, y=nuts) |> 
-  select(idno, essround, region, LEVL_CODE, NAME_LATN , agea, gndr,lrscale, impenv) |> 
-  drop_na(idno, essround, region, agea, gndr,lrscale, impenv) |>
+  select(idno, essround, cntry, region, LEVL_CODE, NAME_LATN , agea, gndr,lrscale, impenv, geometry) |> 
+  drop_na(idno, essround, cntry, region, agea, gndr,lrscale, impenv) |>
   filter(
     region != "99999",
     lrscale <= 10,
@@ -57,43 +59,72 @@ ESS_prepared <-
     gndr = factor(gndr, levels = c(1, 2), labels = c("Male", "Female"))
   )
 
-
-
-
-ESS_prepared |> 
-  group_by(LEVL_CODE) |> 
-  summarise(count = n()) # change level 3 regions into level 2 regions
-
-
-
-
 # prepare a dataset of floods from 2016 until 2019 in the areas where people were surveyed
 
 HANZE_events_prepared <- 
   HANZE_events |>
     rename(
       end_date = `End date`,
+      country = `Country code`,
       region = `Regions affected (v2010)`
     ) |> 
-    select(ID, end_date, region) |> 
+    select(ID, end_date, country, region) |> 
     filter(
       between(as.Date(end_date, format = "%Y-%m-%d"), as.Date("2016-01-01"), as.Date("2019-12-31")) # maybe use year variable instead
-    )
+    ) |> 
+    separate_rows(region, sep = ";")
 
 
-# Plot histogram
-ggplot(HANZE_events_prepared, aes(x = end_date)) +
-  geom_histogram(binwidth = 30, fill = "skyblue", color = "black") +
-  labs(
-    title = "Distribution of End Dates",
-    x = "End Date",
-    y = "Count"
-  ) +
-  theme_minimal()
+HANZE_events_prepared_geom <- left_join(x=HANZE_events_prepared, y = nuts) |>
+  drop_na(LEVL_CODE)
 
-HANZE_events_prepared_long <- 
-  HANZE_events_prepared |>
-      separate_rows(region, sep = ";")
+level_2_countries <- c("AT", "BE", "CH", "ES", "FR", "GR", "IT", "NL", "NO", "PL", "PT")
+
+
+
+# Spatial Merge from level 3 to level 2 ---------------------------------------------------------------------------------------------------
+
+library(sf)
+library(dplyr)
+
+# Example level_2_countries vector
+level_2_countries <- c("AT", "BE") # Replace with your actual Level 2 countries
+
+# Filter HANZE_events_prepared_geom for Level 2 countries
+HANZE_level2 <- HANZE_events_prepared_geom %>%
+  filter(country %in% level_2_countries)
+
+# Filter nuts dataset to include only Level 2 regions
+nuts_level2 <- nuts %>%
+  filter(LEVL_CODE == 2)
+
+# Perform spatial join to associate each region in HANZE_level2 with its Level 2 region in nuts
+HANZE_level2_aggregated <- HANZE_level2 %>%
+  st_join(nuts_level2, join = st_within, left = FALSE) %>%
+  group_by(region = nuts_level2$region) %>%
+  summarize(
+    ID = first(ID), # Adjust aggregation for ID as needed
+    end_date = max(end_date), # Adjust as per your aggregation rule
+    NAME_LATN = first(NAME_LATN), # Adjust as per your aggregation rule
+    geometry = st_union(geometry)
+  )
+
+# Combine with non-Level 2 data
+HANZE_other <- HANZE_events_prepared_geom %>%
+  filter(!country %in% level_2_countries)
+
+# Combine aggregated Level 2 data and other data
+HANZE_combined <- bind_rows(HANZE_level2_aggregated, HANZE_other)
+
+# Save or inspect the result
+st_write(HANZE_combined, "HANZE_aggregated.shp")
+
+
+
+# Create the Treatment and Control Groups -------------------------------------------------------------------------
+
+
+
 
 # identify the surveyed people that experienced floods
 # put them in the treatment group
@@ -124,30 +155,79 @@ control_group_before <- control_group |> filter(essround == 8)
 control_group_after <- control_group |> filter(essround == 10) 
 
 
-#plot it on a map
 
-sf_HANZE = read_sf("data/HANZE/datasets/HANZE_floods_regions_2021/HANZE_floods_regions_2021.shp")
+# Plot the events over time ---------------------------------------------------------------------------------------
 
-sf_HANZE_prepared <- 
-  sf_HANZE |>
-  filter(
-    Year >= 2016 &  Year <= 2016
-  ) |> 
-  mutate(
-    "ISO3" = countrycode(Country, origin = 'country.name', destination = 'iso3c')
-  ) |> 
-  filter(
-    ISO3 %in% c(ESS10_prepared_countries$ISO3)
-  )
+# Plot histogram
+ggplot(HANZE_events_prepared, aes(x = end_date)) +
+  geom_histogram(binwidth = 30, fill = "skyblue", color = "black") +
+  labs(
+    title = "Distribution of End Dates",
+    x = "End Date",
+    y = "Count"
+  ) +
+  theme_minimal()
 
 
+# Create map ------------------------------------------------------------------------------------------------------
 
-map_HANZE_prepared <- tm_basemap("OpenStreetMap") +
-  tm_shape(sf_HANZE_prepared) + 
-  tm_dots(col = "blue", size = 0.1)
+ESS_prepared_geom_3 <- 
+  ESS_prepared |> 
+  group_by(region, cntry, LEVL_CODE, geometry) |> 
+  summarise(count = n()) |> 
+  filter(LEVL_CODE == 3)
+
+ESS_prepared_geom_3 |> 
+  group_by(cntry) |> 
+  summarise(count = n())
+
+ESS_prepared_geom_2 <- 
+  ESS_prepared |> 
+  group_by(region, cntry, LEVL_CODE, geometry) |> 
+  summarise(count = n()) |> 
+  filter(LEVL_CODE == 2)
+
+ESS_prepared_geom_2 |> 
+  group_by(cntry) |> 
+  summarise(count = n()) |> 
+  select(cntry) |> 
+  as.character()
+
+ESS_prepared_geom_1 <- 
+  ESS_prepared |> 
+  group_by(region, cntry, LEVL_CODE, geometry) |> 
+  summarise(count = n()) |> 
+  filter(LEVL_CODE == 1)
+
+ESS_prepared_geom_1 |> 
+  group_by(cntry) |> 
+  summarise(count = n())
+
+HANZE_geom <- 
+  left_join(x = HANZE_events_prepared, y = nuts) |> 
+  drop_na(LEVL_CODE) |> 
+  group_by(region, LEVL_CODE, geometry) |> 
+  summarise(count = n())
+
+treatment_group_geom <- treatment_group |> 
+  group_by(region, LEVL_CODE, geometry) |> 
+  summarise(count = n())
+
+map <- tm_basemap("OpenStreetMap") +
+  tm_shape(ESS_prepared_geom_3$geometry) +
+  tm_polygons(col = "red") +
+  tm_shape(ESS_prepared_geom_2$geometry) +
+  tm_polygons(col = "green") +
+  tm_shape(ESS_prepared_geom_1$geometry) +
+  tm_polygons(col = "purple") +
+  tm_shape(HANZE_geom$geometry) +
+  tm_polygons(col = "blue") +
+  tm_shape(treatment_group_geom$geometry) +
+  tm_polygons(col = "yellow")
 tmap_mode("view")
 tmap_options(check.and.fix = TRUE)
-print(map_HANZE_prepared)
+print(map)
+
 
 
 
