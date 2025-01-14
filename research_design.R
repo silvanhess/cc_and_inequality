@@ -237,8 +237,8 @@ map <- tm_basemap("OpenStreetMap") +
 # put them in the treatment group
 
 treatment_group <-     
-  left_join(x = HANZE_combined, 
-            y = ESS_prepared,
+  inner_join(x = ESS_prepared, 
+            y = HANZE_combined,
             relationship = "many-to-many"
   ) |> 
   group_by(across(-region)) |> 
@@ -247,33 +247,34 @@ treatment_group <-
     .groups = "drop") |> 
   select(
     idno, essround, date, cntry, region, LEVL_CODE, NAME_LATN, agea, gndr, lrscale, impenv, ID, end_date, geometry
-  ) # arrange the variables manually
+  ) |>  # arrange the variables manually
+  distinct(idno, date, .keep_all = TRUE) |> # delete duplicates
+  filter(cntry != "UK") # drop UK because regions are too large
 
-
-treatment_group |> 
-  group_by(region) |> 
-  summarize(count = n()) |> 
-  view() # some regions only have 1 Person -> drop them
-
-region_selector <- 
-  treatment_group |> 
-    group_by(region) |> 
-    summarize(count = n()) |> 
-    filter(count >= 30) |>
-    select(region) |> 
-    as.list()
-
-
-# create dataframe with regions that have at least 30 obvervations
-treatment_group_filtered <- 
-  treatment_group |> 
-    filter(region %in% region_selector$region)
-
-
-treatment_group_filtered |> 
-  group_by(region) |> 
-  summarize(count = n()) |> 
-  view() # now we have regions with at least 30 observations
+# treatment_group |> 
+#   group_by(region) |> 
+#   summarize(count = n()) |> 
+#   view() # some regions only have 1 Person -> drop them
+# 
+# region_selector <- 
+#   treatment_group |> 
+#     group_by(region) |> 
+#     summarize(count = n()) |> 
+#     filter(count >= 30) |>
+#     select(region) |> 
+#     as.list()
+# 
+# 
+# # create dataframe with regions that have at least 30 obvervations
+# treatment_group_filtered <- 
+#   treatment_group |> 
+#     filter(region %in% region_selector$region)
+# 
+# 
+# treatment_group_filtered |> 
+#   group_by(region) |> 
+#   summarize(count = n()) |> 
+#   view() # now we have regions with at least 30 observations
 
 
 # visualize on a map
@@ -283,11 +284,12 @@ treatment_group_geom <- treatment_group_filtered |>
 map <- tm_basemap("OpenStreetMap") +
   tm_shape(treatment_group_geom$geometry) +
   tm_polygons(col = "black")
-tmap_mode("view")
-print(map)
+# tmap_mode("view")
+# print(map)
 
-treatment_group_before <- treatment_group_filtered |> filter(essround == 8)
-treatment_group_after <- treatment_group_filtered |> filter(essround == 10) 
+# split into before and after the floodings
+treatment_group_before <- treatment_group |> filter(essround == 8)
+treatment_group_after <- treatment_group |> filter(essround == 10) 
 
 
 # identify the surveyed people that haven't experienced floods
@@ -295,8 +297,24 @@ treatment_group_after <- treatment_group_filtered |> filter(essround == 10)
 
 
 control_group <- ESS_prepared %>%
-  filter(!idno %in% treatment_group_filtered$idno)
+  filter(!idno %in% treatment_group$idno,
+         cntry %in% treatment_group$cntry)
+  
 
+# visualize on a map
+control_group_geom <- control_group |>
+  group_by(region, LEVL_CODE, geometry) |>
+  summarise(count = n())
+map <- tm_basemap("OpenStreetMap") +
+  tm_shape(treatment_group_geom$geometry) +
+  tm_polygons(col = "black") +
+  tm_shape(control_group_geom$geometry) +
+  tm_polygons(col = "red")
+# tmap_mode("view")
+# print(map)
+
+
+# split into before and after the floodings
 control_group_before <- control_group |> filter(essround == 8)
 control_group_after <- control_group |> filter(essround == 10) 
 
@@ -317,13 +335,12 @@ survey_respondents_per_group <-
     byrow = TRUE
   )
 
-# Plot the events over time ---------------------------------------------------------------------------------------
+# Descriptive Analysis ---------------------------------------------------------------------------------------
 
+# Distribution of Floods over time
 df_hist_HANZE_combined <- 
   HANZE_combined |> 
   distinct(ID, .keep_all = TRUE)
-
-# Plot histogram
 ggplot(df_hist_HANZE_combined, aes(x = end_date)) +
   geom_histogram(binwidth = 30, fill = "skyblue", color = "black") +
   labs(
@@ -333,66 +350,29 @@ ggplot(df_hist_HANZE_combined, aes(x = end_date)) +
   ) +
   theme_minimal()
 
+# Distribution of Countries
+treatment_group_filtered |> 
+  group_by(cntry) |> 
+  summarize(count = n()) |> 
+  ggplot(aes(x = reorder(cntry, count), y = count)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(
+    title = "Distribution of Countries in the Treatment Group",
+    x = "Country",
+    y = "Count"
+  ) +
+  theme_minimal()
 
-# Create map ------------------------------------------------------------------------------------------------------
+control_group |> 
+  group_by(cntry) |> 
+  summarize(count = n()) |> 
+  ggplot(aes(x = reorder(cntry, count), y = count)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(
+    title = "Distribution of Countries in the Control Group",
+    x = "Country",
+    y = "Count"
+  ) +
+  theme_minimal()
 
-ESS_prepared_geom_3 <- 
-  ESS_prepared |> 
-  group_by(region, cntry, LEVL_CODE, geometry) |> 
-  summarise(count = n()) |> 
-  filter(LEVL_CODE == 3)
 
-ESS_prepared_geom_2 <- 
-  ESS_prepared |> 
-  group_by(region, cntry, LEVL_CODE, geometry) |> 
-  summarise(count = n()) |> 
-  filter(
-    LEVL_CODE == 2)
-
-ESS_prepared_geom_1 <- 
-  ESS_prepared |> 
-  group_by(region, cntry, LEVL_CODE, geometry) |> 
-  summarise(count = n()) |> 
-  filter(
-    LEVL_CODE == 1)
-
-ESS_geom <- 
-  ESS_prepared |> 
-  group_by(region, LEVL_CODE, geometry) |> 
-  summarize(number_of_participants_per_region = n(), .groups = "drop") |> 
-  filter(
-    LEVL_CODE >= 1)
-
-HANZE_geom <- 
-  left_join(x = HANZE_combined, y = nuts) |> 
-  drop_na(LEVL_CODE) |> 
-  group_by(region, LEVL_CODE, geometry) |> 
-  summarise(count = n())
-
-treatment_group_geom <- treatment_group_filtered |>
-  group_by(region, LEVL_CODE, geometry) |>
-  summarise(count = n())
-
-control_group_geom <- control_group |>
-  group_by(region, LEVL_CODE, geometry) |>
-  summarise(count = n()) |> 
-  drop_na(LEVL_CODE)
-
-map <- tm_basemap("OpenStreetMap") +
-  # tm_shape(ESS_prepared_geom_1$geometry) +
-  # tm_polygons(col = "white") +
-  # tm_shape(ESS_prepared_geom_2$geometry) +
-  # tm_polygons(col = "white") +
-  # tm_shape(ESS_prepared_geom_3$geometry) +
-  # tm_polygons(col = "white") +
-  # tm_shape(ESS_geom$geometry) +
-  # tm_polygons(col = "red") +
-  tm_shape(HANZE_geom$geometry) +
-  tm_polygons(col = "blue") +
-  tm_shape(treatment_group_geom$geometry) +
-  tm_polygons(col = "yellow") +
-  tm_shape(control_group_geom$geometry) +
-  tm_polygons(col = "black")
-tmap_mode("view")
-tmap_options(check.and.fix = TRUE)
-print(map)
