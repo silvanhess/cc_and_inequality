@@ -38,6 +38,8 @@ ESS8 <- read_csv("data/ESS/ESS8e02_3/ESS8e02_3.csv")
 # ESS8 |> filter(cntry == "IT") |> select(regunit)
 # whiy does italy have level 1 regions in wave 10??
 
+ESS8$ccrdprs
+
 # flood data
 # download from https://essd.copernicus.org/articles/16/5145/2024/essd-16-5145-2024-assets.html
 
@@ -55,6 +57,11 @@ nuts <-
   select(region, CNTR_CODE, LEVL_CODE, NAME_LATN, geometry)
 
 
+# outcome variables
+# lrscale, left-right scale
+# wrclmch, how worried about climate change
+# ccnthum, CC caused naturally or by humans
+# ccrdprs, personal responsability to reduce CC
 
 # prepare a dataset with survey participants from wave eight and ten
 
@@ -70,19 +77,18 @@ ESS_prepared <-
     date = if_else(essround == 8, date8, date10) |> as.Date()
   ) |> 
   left_join(y=nuts) |> 
-  select(idno, essround, date, cntry, region, LEVL_CODE, NAME_LATN, lrscale, wrclmch, geometry) |> 
-  drop_na(idno, essround, cntry, region,  lrscale, wrclmch) |>
-  filter(
-    region != "99999",
-    lrscale <= 10,
-    wrclmch <= 5
-  ) |> 
+  select(idno, essround, date, cntry, region, LEVL_CODE, NAME_LATN, ccrdprs, geometry) |> 
+  mutate(
+    region = if_else(region == "99999", NA, region),
+    ccrdprs = if_else(ccrdprs >= 10, NA, ccrdprs)
+  ) |>  
+  drop_na(idno, essround, cntry, region, ccrdprs) |>
   # mutate(
   #   cntry = if_else(cntry == "GB", "UK", cntry) # change GB to UK in cntry
   # ) |> 
   filter(LEVL_CODE != 1) |>  # exclude level 1 regions
   mutate(respondent_id = seq_len(n())) |> 
-  select(respondent_id, essround, date, cntry, region, LEVL_CODE, NAME_LATN, agea, gndr, lrscale, wrclmch, geometry)
+  select(respondent_id, essround, date, cntry, region, LEVL_CODE, NAME_LATN, ccrdprs, geometry)
 
 # ESS_prepared |>
 #   group_by(region, essround) |>
@@ -271,7 +277,7 @@ treatment_group <-
     region = paste(unique(region), collapse = ";"),
     .groups = "drop") |> 
   select(
-    respondent_id, essround, date, cntry, region, LEVL_CODE, NAME_LATN, agea, gndr, lrscale, wrclmch, flood_id, end_date, geometry
+    respondent_id, essround, date, cntry, region, LEVL_CODE, NAME_LATN, ccrdprs, flood_id, end_date, geometry
   ) |>  # arrange the variables manually
   distinct(respondent_id, .keep_all = TRUE) # delete duplicates
 
@@ -400,8 +406,6 @@ control_group |>
 
 # Code the Treatment Variable & Outcome Variable -------------------------------------------------------------------
 
-row_number(ESS_prepared)
-
 data <- 
   bind_rows(treatment_group, control_group) |> 
     mutate(
@@ -410,26 +414,28 @@ data <-
   mutate(time = if_else(essround == 8, 0, 1)) |> 
   rename(
     treatment_variable = Flood,
-    outcome_variable = wrclmch,
-    control_variable = lrscale
+    outcome_variable = ccrdprs
+    # control_variable = lrscale
   ) |> 
   mutate(
-    outcome_variable = factor(outcome_variable, ordered = TRUE),
-    control_variable = factor(control_variable, ordered = TRUE))
-
+    outcome_variable = factor(outcome_variable, ordered = TRUE)
+    # control_variable = factor(control_variable, ordered = TRUE)
+  )
 
 # data$outcome_variable
+# data$treatment_variable
 # data$control_variable
 
 # Check Pre-Treatment Characteristics -----------------------------------------------------------------------------
 
 
-pre_treatment_data <- data %>%
+pre_treatment_data <- data |> 
   filter(time == 0)  # Keep only rows from the pre-treatment period
+# pre_treatment_data <- as.numeric(data$outcome_variable)
 
-pre_treatment_data %>%
-  group_by(treatment_variable) %>%
-  summarize(
+pre_treatment_data |> 
+  group_by(LEVL_CODE) |> 
+  summarise(
     mean_outcome = mean(outcome_variable, na.rm = TRUE),
     median_outcome = median(outcome_variable, na.rm = TRUE),
     sd_outcome = sd(outcome_variable, na.rm = TRUE),
