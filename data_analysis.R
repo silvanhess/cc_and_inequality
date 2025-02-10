@@ -22,11 +22,13 @@ sf_nuts <- read_sf("data/NUTS/NUTS_RG_20M_2010_3035.shp/NUTS_RG_20M_2010_3035.sh
 ESS8 <- read_csv("data/ESS/ESS8e02_3/ESS8e02_3.csv")
 ESS9 <- read_csv("data/ESS/ESS9e03_2/ESS9e03_2.csv")
 ESS10 <- bind_rows(read_csv("data/ESS/ESS10/ESS10.csv"), read_csv("data/ESS/ESS10SC/ESS10SC.csv"))
+ESS11 <- read_csv("data/ESS/ESS11/ESS11.csv")
 ESS_all <- read_csv("data/ESS/ESSsubset/ESS8e02_3-ESS9e03_2-ESS10-ESS10SC-ESS11-subset.csv")
 
-# ESS10 |> filter(cntry == "IT") |> select(regunit)
+ESS11 |> filter(cntry == "IT") |> select(regunit)
+ESS_all |> filter(cntry == "IT") |> select(regunit)
 # ESS8 |> filter(cntry == "IT") |> select(regunit)
-# whiy does italy have level 1 regions in wave 10??
+
 
 
 
@@ -46,6 +48,7 @@ nuts <-
   rename(region = NUTS_ID) |> 
   select(region, CNTR_CODE, LEVL_CODE, NAME_LATN, geometry)
 
+country_polygons <- nuts |> filter(LEVL_CODE == 0)
 
 # outcome variables
 # impenv, importance to care for environment
@@ -65,7 +68,7 @@ ESS_prepared <-
   filter(essround == 9 | essround == 10) |> 
   filter(cntry %in% ESS9$cntry, # make sure that the country in wave 10 is also in wave 9
          cntry %in% ESS10$cntry, # make sure that the country in wave 8 is also in wave 10
-         cntry != "FR") |> # exclude France because there is only Survey Data from Paris
+         cntry %in% c("UK", "ES", "CH", "IE")) |> # only include countries with sufficient data
   mutate(
     date8 = as.Date(paste(inwdds, inwmms, inwyys, sep = "-"), format = "%d-%m-%Y"),
     date10 = inwds
@@ -81,7 +84,6 @@ ESS_prepared <-
     wrclmch = if_else(wrclmch >= 5, NA, wrclmch)
   ) |>
   drop_na(idno, essround, cntry, region, wrclmch) |>
-  # filter(LEVL_CODE != 1) |>  # exclude level 1 regions
   mutate(respondent_id = seq_len(n())) |>
   select(respondent_id, essround, date, cntry, region, LEVL_CODE, NAME_LATN, wrclmch, geometry) |> 
   st_as_sf()
@@ -136,8 +138,8 @@ floods_prepared <-
   floods_regions |> 
   mutate(end_date = make_date(End_Y, End_M, End_D)) |> 
   filter(between(as.Date(end_date, format = "%Y-%m-%d"), as.Date("2017-11-01"), as.Date("2021-02-01")),
-         Code %in% ESS_prepared$cntry, # only floods in countries that were surveyed
-         Code != "FR") |> # exclude France because there is only Survey Data from Paris
+         Code %in% ESS_prepared$cntry # only floods in countries that were surveyed
+  ) |> 
   rename(
     country = Code,
     flood_id = ID,
@@ -251,7 +253,10 @@ map <- tm_basemap("OpenStreetMap") +
   tm_borders(col = "black", lwd = 1) + 
   tm_shape(control_region_after$geometry) +
   tm_polygons(fill = "yellow", fill_alpha = 0.5) +
-  tm_borders(col = "black", lwd = 1)  
+  tm_borders(col = "black", lwd = 1) +
+  tm_shape(country_polygons$geometry) +
+  tm_polygons(fill = "orange", fill_alpha = 0.5) +
+  tm_borders(col = "black", lwd = 1)
 
 
 tmap_mode("view")
