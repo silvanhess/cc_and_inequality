@@ -20,6 +20,7 @@ sf_nuts <- read_sf("data/NUTS/NUTS_RG_20M_2010_3035.shp/NUTS_RG_20M_2010_3035.sh
 # Download from https://ess.sikt.no/en/
 
 ESS8 <- read_csv("data/ESS/ESS8e02_3/ESS8e02_3.csv")
+ESS9 <- read_csv("data/ESS/ESS9e03_2/ESS9e03_2.csv")
 ESS10 <- bind_rows(read_csv("data/ESS/ESS10/ESS10.csv"), read_csv("data/ESS/ESS10SC/ESS10SC.csv"))
 ESS_all <- read_csv("data/ESS/ESSsubset/ESS8e02_3-ESS9e03_2-ESS10-ESS10SC-ESS11-subset.csv")
 
@@ -60,9 +61,9 @@ nuts <-
 # ESS_all |> filter(cntry == "UK")
 
 ESS_prepared <- 
-  bind_rows(ESS10, ESS8) |> 
-  filter(essround == 8 | essround == 10) |> 
-  filter(cntry %in% ESS8$cntry, # make sure that the country in wave 10 is also in wave 8
+  bind_rows(ESS10, ESS9) |> 
+  filter(essround == 9 | essround == 10) |> 
+  filter(cntry %in% ESS9$cntry, # make sure that the country in wave 10 is also in wave 9
          cntry %in% ESS10$cntry, # make sure that the country in wave 8 is also in wave 10
          cntry != "FR") |> # exclude France because there is only Survey Data from Paris
   mutate(
