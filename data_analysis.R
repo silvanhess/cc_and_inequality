@@ -3,6 +3,8 @@
 library(tidyverse)
 library(sf)
 library(tmap)
+library(ggplot2)
+library(MASS)
 # library(readxl)
 # library(haven)
 # library(labelled)
@@ -21,10 +23,11 @@ sf_nuts <- read_sf("data/NUTS/NUTS_RG_20M_2010_3035.shp/NUTS_RG_20M_2010_3035.sh
 
 ESS8 <- read_csv("data/ESS/ESS8e02_3/ESS8e02_3.csv")
 ESS10 <- bind_rows(read_csv("data/ESS/ESS10/ESS10.csv"), read_csv("data/ESS/ESS10SC/ESS10SC.csv"))
+ESS11 <- read_csv("data/ESS/ESS11/ESS11.csv")
 ESS_all <- read_csv("data/ESS/ESSsubset/ESS8e02_3-ESS9e03_2-ESS10-ESS10SC-ESS11-subset.csv")
 
-# ESS10 |> filter(cntry == "IT") |> select(regunit)
-# ESS8 |> filter(cntry == "IT") |> select(regunit)
+# ESS8 |> filter(cntry == "IE") |> select(region) |> group_by(region) |> summarise(count = n())
+# ESS10 |> filter(cntry == "IE") |> select(regunit)
 # whiy does italy have level 1 regions in wave 10??
 
 
@@ -45,6 +48,7 @@ nuts <-
   rename(region = NUTS_ID) |> 
   select(region, CNTR_CODE, LEVL_CODE, NAME_LATN, geometry)
 
+country_polygons <- nuts |> filter(LEVL_CODE == 0)
 
 # outcome variables
 # impenv, importance to care for environment
@@ -64,7 +68,7 @@ ESS_prepared <-
   filter(essround == 8 | essround == 10) |> 
   filter(cntry %in% ESS8$cntry, # make sure that the country in wave 10 is also in wave 8
          cntry %in% ESS10$cntry, # make sure that the country in wave 8 is also in wave 10
-         cntry != "FR") |> # exclude France because there is only Survey Data from Paris
+         cntry %in% c("GB", "ES", "CH", "AT")) |> # only include countries with sufficient data
   mutate(
     date8 = as.Date(paste(inwdds, inwmms, inwyys, sep = "-"), format = "%d-%m-%Y"),
     date10 = inwds
@@ -74,38 +78,42 @@ ESS_prepared <-
     cntry = if_else(cntry == "GB", "UK", cntry)
   ) |>
   left_join(y=nuts)  |>
-  select(idno, essround, date, cntry, region, LEVL_CODE, NAME_LATN, wrclmch, geometry) |>
+  select(idno, essround, date, 
+         cntry, region, LEVL_CODE, NAME_LATN, # geographical information
+         wrclmch, age, gender, lrscale, # outcome and control variables
+         geometry) |>
   mutate(
     region = if_else(region == "99999", NA, region),
     wrclmch = if_else(wrclmch >= 5, NA, wrclmch)
   ) |>
   drop_na(idno, essround, cntry, region, wrclmch) |>
-  # filter(LEVL_CODE != 1) |>  # exclude level 1 regions
   mutate(respondent_id = seq_len(n())) |>
-  select(respondent_id, essround, date, cntry, region, LEVL_CODE, NAME_LATN, wrclmch, geometry) |> 
+  select(respondent_id, essround, date, 
+         cntry, region, LEVL_CODE, NAME_LATN, # geographical information
+         wrclmch, age, gender, lrscale, # outcome and control variables
+         geometry) |> 
   st_as_sf()
 
 # ESS_prepared |>
-#   as_tibble() |> 
+#   as_tibble() |>
 #   group_by(cntry) |>
-#   summarize(count = n()) |> 
+#   summarize(count = n()) |>
 #   print(n=999)
 
-# ESS_prepared |> 
-#   filter(essround == 8) |>
-#   group_by(cntry) |>
-#   summarise(min_date = min(date, na.rm = TRUE),
-#             mean_date = mean(date, na.rm = TRUE),
-#             max_date = max(date, na.rm = TRUE)) |> 
-#   view()
-# 
-# ESS_prepared |> 
+# ESS_prepared |>
+#   as_tibble() |> 
 #   filter(essround == 10) |>
 #   group_by(cntry) |>
 #   summarise(min_date = min(date, na.rm = TRUE),
 #             mean_date = mean(date, na.rm = TRUE),
-#             max_date = max(date, na.rm = TRUE)) |> 
-#   view()
+#             max_date = max(date, na.rm = TRUE))
+# 
+# 
+# ESS_prepared |> 
+#   as_tibble() |> 
+#   filter(essround == 10) |> 
+#   select(date) |> 
+#   drop_na()
 
 
 # Prepare Floods Data ---------------------------------------------------------------------------------------------
@@ -130,13 +138,14 @@ ESS_prepared <-
 #     arrange(flood_id) |> 
 #     distinct(across(-geometry), .keep_all = TRUE)
 
-# floods_regions |> colnames()
 floods_prepared <- 
   floods_regions |> 
   mutate(end_date = make_date(End_Y, End_M, End_D)) |> 
-  filter(between(as.Date(end_date, format = "%Y-%m-%d"), as.Date("2017-11-01"), as.Date("2021-02-01")),
-         Code %in% ESS_prepared$cntry, # only floods in countries that were surveyed
-         Code != "FR") |> # exclude France because there is only Survey Data from Paris
+  filter(between(as.Date(end_date, format = "%Y-%m-%d"), 
+                 as.Date("2017-06-18"), # date of the last survey in wave 8
+                 as.Date("2021-05-05")), # date of the first survey in wave 10
+         Code %in% ESS_prepared$cntry # only floods in countries that were surveyed
+         ) |>
   rename(
     country = Code,
     flood_id = ID,
@@ -189,11 +198,18 @@ sf_ESS_prepared_grouped <-
   group_by(region, geometry) |> 
   summarise(count = n())
 
+# containment_check_old <- 
+#   st_intersects(sf_ESS_prepared_grouped, floods_prepared)
+
+# Shrink each polygon by 10 kilometers (to avoid overlaps to neighbouring regions)
+sf_ESS_shrunk <- st_buffer(sf_ESS_prepared_grouped, dist = -10000)
+
 containment_check <- 
-  st_intersects(sf_ESS_prepared_grouped, floods_prepared)
+  st_intersects(sf_ESS_shrunk, floods_prepared)
+
 
 ESS_intersects <- 
-  st_join(sf_ESS_prepared_grouped, floods_prepared, join = st_intersects) |> 
+  st_join(sf_ESS_shrunk, floods_prepared, join = st_intersects) |> 
   distinct(region, .keep_all = TRUE) |>  # to flag a region as flooded only one flood is necessary
   as_tibble()
 
@@ -250,238 +266,36 @@ map <- tm_basemap("OpenStreetMap") +
   tm_borders(col = "black", lwd = 1) + 
   tm_shape(control_region_after$geometry) +
   tm_polygons(fill = "yellow", fill_alpha = 0.5) +
-  tm_borders(col = "black", lwd = 1)  
+  tm_borders(col = "black", lwd = 1) +
+  tm_shape(country_polygons$geometry) +
+  tm_polygons(fill = "orange", fill_alpha = 0.5) +
+  tm_borders(col = "black", lwd = 1)
 
 
 tmap_mode("view")
 print(map)
 
 
-# Spatial Merge from level 3 to level 2 ---------------------------------------------------------------------------------
 
-# Identify Countries that have level 2 regions
-ESS_prepared |> 
-  filter(LEVL_CODE == 2) |> 
-  group_by(cntry) |> 
-  summarise(count = n()) 
-level_2_countries <- c("AT", "BE", "CH", "ES", "FR", "NL", "NO", "PL", "PT") 
-
-# Filter HANZE_events_prepared_geom for countries that have Level 2 regions
-HANZE_level2_old <- 
-  HANZE_prepared %>%
-  filter(country %in% level_2_countries) |> 
-  st_as_sf()
-
-# Filter nuts dataset to include only Level 2 regions
-nuts_level2 <- 
-  nuts %>%
-  filter(LEVL_CODE == 2,
-         CNTR_CODE %in% level_2_countries) |> 
-  st_as_sf()
-
-# Perform spatial join to check if the events are within the Level 2 regions
-containment_check <- st_intersects(HANZE_level2_old, nuts_level2)
-# containment_check <- st_within(HANZE_level2_old, nuts_level2)
-
-# Join the small polygons with the large ones based on containment
-level2_joined <- st_join(HANZE_level2_old, nuts_level2, join = st_intersects)
-
-# select the columns of the level 2 regions
-HANZE_level2_new <- 
-  level2_joined |> 
-  select(flood_id, end_date, country, region.y, LEVL_CODE.y, NAME_LATN.y) |>
-  as_tibble() |>  
-  select(-geometry) |> 
-  rename(region = region.y, LEVL_CODE = LEVL_CODE.y, NAME_LATN = NAME_LATN.y) |> 
-  distinct(flood_id, region, .keep_all = TRUE) |> # delete duplicates
-  left_join(y = nuts) |> # add the polygons of level 2 regions
-  select(-CNTR_CODE)
-
-
-  
-# visualize on map
-# map <- tm_basemap("OpenStreetMap") +
-#   tm_shape(HANZE_level2_new$geometry) +
-#   tm_polygons(col = "black")
-# tmap_mode("view")
-# print(map)
-
-
-# Spatial Merge from level 3 to level 1 --------------------------------------------------------------------------------
-
-# # Identify Countries that have level 1 regions
-# ESS_prepared |> 
-#   filter(LEVL_CODE == 1) |> 
-#   group_by(cntry) |> 
-#   summarise(count = n()) 
-# 
-# level_1_countries <- c("DE", "UK")
-# 
-# # Filter HANZE_events_prepared_geom for countries that have Level 2 regions
-# HANZE_level1_old <- 
-#   HANZE_prepared %>%
-#   filter(country %in% level_1_countries) |> 
-#   st_as_sf()
-# 
-# # Filter nuts dataset to include only Level 1 regions
-# nuts_level1 <- 
-#   nuts %>%
-#   filter(LEVL_CODE == 1,
-#          CNTR_CODE %in% level_1_countries) |> 
-#   st_as_sf()
-# 
-# # Perform spatial join to check if the events are within the Level 1 regions
-# containment_check <- st_intersects(HANZE_level1_old, nuts_level1)
-# 
-# # Join the small polygons with the large ones based on containment
-# level1_joined <- st_join(HANZE_level1_old, nuts_level1, join = st_intersects)
-# 
-# # select the columns of the level 1 regions
-# HANZE_level1_new <- 
-#   level1_joined |> 
-#   select(ID, end_date, country, region.y, LEVL_CODE.y, NAME_LATN.y) |>
-#   as_tibble() |>  
-#   select(-geometry) |> # remove the polygons of level 3 regions
-#   rename(region = region.y, LEVL_CODE = LEVL_CODE.y, NAME_LATN = NAME_LATN.y) |> 
-#   distinct(ID, region, .keep_all = TRUE) |> # delete duplicates
-#   left_join(y = nuts) |> # add the polygons of level 1 regions
-#   select(-CNTR_CODE)
-# 
-# # visualize on map
-# map <- tm_basemap("OpenStreetMap") +
-#   tm_shape(HANZE_level2_new$geometry) +
-#   tm_polygons(col = "black") +
-#   tm_shape(HANZE_level1_new$geometry) +
-#   tm_polygons(col = "red")
-# # tmap_mode("view")
-# # print(map)
-
-
-# Put the Datasets together ---------------------------------------------------------------------------------
-
-HANZE_level3 <- 
-  HANZE_prepared |> 
-  filter(!(country %in% level_2_countries))
-
-HANZE_combined <- 
-  bind_rows(HANZE_level3, HANZE_level2_new) |> 
-  mutate(
-    LEVL_CODE = if_else(is.na(LEVL_CODE), 2, LEVL_CODE)
-  ) |> 
-  select(flood_id, end_date, country, region, LEVL_CODE, NAME_LATN, geometry)
-
-# HANZE_combined |> 
-#   group_by(country) |> 
-#   summarise(count = n())
-
-# visualize on map
-# map <- tm_basemap("OpenStreetMap") +
-#   tm_shape(HANZE_combined$geometry) +
-#   tm_polygons(col = "black")
-#tmap_mode("view")
-#print(map)
-
-
-# Create the Treatment and Control Groups -------------------------------------------------------------------------
-
-# identify the surveyed people that experienced floods
-# put them in the treatment group
-
-treatment_group <-     
-  inner_join(x = ESS_prepared, 
-            y = HANZE_combined,
-            relationship = "many-to-many"
-  ) |> 
-  group_by(across(-region)) |> 
-  summarize(
-    region = paste(unique(region), collapse = ";"),
-    .groups = "drop") |> 
-  select(
-    respondent_id, essround, date, cntry, region, LEVL_CODE, NAME_LATN, ccrdprs, flood_id, end_date, geometry
-  ) |>  # arrange the variables manually
-  distinct(respondent_id, .keep_all = TRUE) # delete duplicates
-
-# treatment_group |> 
-#   group_by(region) |> 
-#   summarize(count = n()) |> 
-#   view() # some regions only have 1 Person -> drop them
-# 
-# region_selector <- 
-#   treatment_group |> 
-#     group_by(region) |> 
-#     summarize(count = n()) |> 
-#     filter(count >= 30) |>
-#     select(region) |> 
-#     as.list()
-# 
-# 
-# # create dataframe with regions that have at least 30 obvervations
-# treatment_group_filtered <- 
-#   treatment_group |> 
-#     filter(region %in% region_selector$region)
-# 
-# 
-# treatment_group_filtered |> 
-#   group_by(region) |> 
-#   summarize(count = n()) |> 
-#   view() # now we have regions with at least 30 observations
-
-
-
-# split into before and after the floodings
-treatment_group_before <- treatment_group |> filter(essround == 8)
-treatment_group_after <- treatment_group |> filter(essround == 10) 
-
-
-# identify the surveyed people that haven't experienced floods
-# put them in the control group
-
-control_group <- ESS_prepared |> 
-  anti_join(treatment_group, by = "respondent_id") |> 
-  filter(cntry %in% treatment_group$cntry)
-
-# split into before and after the floodings
-control_group_before <- control_group |> filter(essround == 8)
-control_group_after <- control_group |> filter(essround == 10) 
-  
-
-# visualize on a map
-# treatment_group_geom <- treatment_group |>
-#   group_by(region, LEVL_CODE, geometry) |>
-#   summarise(count = n())
-# control_group_geom <- control_group |>
-#   group_by(region, LEVL_CODE, geometry) |>
-#   summarise(count = n())
-# map <- tm_basemap("OpenStreetMap") +
-#   tm_shape(treatment_group_geom$geometry) +
-#   tm_polygons(col = "black") +
-#   tm_tiles() +
-#   tm_shape(control_group_geom$geometry) +
-#   tm_polygons(col = "red")
-# tmap_mode("view")
-# print(map)
-
-
-
-# matrix with number of survey respondents
-survey_respondents_per_group <- 
-  matrix(
-    data = c(
-      nrow(treatment_group_before),
-      nrow(treatment_group_after),
-      nrow(treatment_group),
-      nrow(control_group_before),
-      nrow(control_group_after),
-      nrow(control_group),
-      nrow(treatment_group_before) + nrow(control_group_before),
-      nrow(treatment_group_after) + nrow(control_group_after),
-      nrow(treatment_group) + nrow(control_group)
-    ),
-    nrow = 3,
-    ncol = 3,
-    dimnames = list(c("Treatment Group", "Control Group", "Total"), c("Before", "After", "Total")),
-    byrow = TRUE
-  )
+# # matrix with number of survey respondents
+# survey_respondents_per_group <- 
+#   matrix(
+#     data = c(
+#       nrow(treatment_group_before),
+#       nrow(treatment_group_after),
+#       nrow(treatment_group),
+#       nrow(control_group_before),
+#       nrow(control_group_after),
+#       nrow(control_group),
+#       nrow(treatment_group_before) + nrow(control_group_before),
+#       nrow(treatment_group_after) + nrow(control_group_after),
+#       nrow(treatment_group) + nrow(control_group)
+#     ),
+#     nrow = 3,
+#     ncol = 3,
+#     dimnames = list(c("Treatment Group", "Control Group", "Total"), c("Before", "After", "Total")),
+#     byrow = TRUE
+#   )
 
 # Descriptive Analysis ---------------------------------------------------------------------------------------
 
@@ -511,9 +325,9 @@ survey_respondents_per_group <-
 #   ) +
 #   theme_minimal()
 # 
-# control_group |> 
-#   group_by(cntry) |> 
-#   summarize(count = n()) |> 
+# control_group |>
+#   group_by(cntry) |>
+#   summarize(count = n()) |>
 #   ggplot(aes(x = reorder(cntry, count), y = count)) +
 #   geom_bar(stat = "identity", fill = "skyblue", color = "black") +
 #   labs(
@@ -523,18 +337,29 @@ survey_respondents_per_group <-
 #   ) +
 #   theme_minimal()
 
+df_survey_results <- 
+  ESS_prepared_with_flood_info |> 
+  as_tibble()
+  
+histogram_survey_results <- 
+  ggplot(df_survey_results, aes(x = wrclmch)) +
+  geom_histogram()
+
+histogram_survey_results_facetted <- 
+  ggplot(df_survey_results, aes(x = wrclmch)) +
+  geom_histogram() +
+  facet_wrap(facets = ~cntry)
+
 
 # Code the Treatment Variable & Outcome Variable -------------------------------------------------------------------
 
 data <- 
-  bind_rows(treatment_group, control_group) |> 
-    mutate(
-      Flood = if_else(respondent_id %in% treatment_group$respondent_id, 1, 0)
-    ) |> 
+  ESS_prepared_with_flood_info |> 
+  as_tibble() |> 
   mutate(time = if_else(essround == 8, 0, 1)) |> 
   rename(
-    treatment_variable = Flood,
-    outcome_variable = ccrdprs
+    treatment_variable = flood,
+    outcome_variable = wrclmch
     # control_variable = lrscale
   ) |> 
   mutate(
@@ -549,24 +374,18 @@ data <-
 # Check Pre-Treatment Characteristics -----------------------------------------------------------------------------
 
 
-pre_treatment_data <- data |> 
-  filter(time == 0)  # Keep only rows from the pre-treatment period
-# pre_treatment_data <- as.numeric(data$outcome_variable)
-
-# pre_treatment_data |> 
-#   group_by(LEVL_CODE) |> 
-#   summarise(
-#     mean_outcome = mean(outcome_variable, na.rm = TRUE),
-#     median_outcome = median(outcome_variable, na.rm = TRUE),
-#     sd_outcome = sd(outcome_variable, na.rm = TRUE),
-#     count = n()
-#   )
+# pre_treatment_data <- data |> 
+#   filter(time == 0)  # Keep only rows from the pre-treatment period
+# 
+# pre_treatment_data <- as.numeric(pre_treatment_data$outcome_variable)
+# 
 # wilcox_test <- wilcox.test(
 #   outcome_variable ~ treatment_variable,
 #   data = pre_treatment_data
 # )
 # print(wilcox_test)
-library(ggplot2)
+
+
 ggplot(pre_treatment_data, aes(x = factor(treatment_variable), y = outcome_variable)) +
   geom_boxplot() +
   labs(x = "Treatment Group", y = "Outcome Variable", title = "Pre-Treatment Distribution")
@@ -574,10 +393,10 @@ ggplot(pre_treatment_data, aes(x = outcome_variable, fill = factor(treatment_var
   geom_density(alpha = 0.5) +
   labs(x = "Outcome Variable", fill = "Treatment Group", title = "Pre-Treatment Density Plot")
 
-?wilcox.test
-?st_intersects
+# ?wilcox.test
+# ?st_intersects
 
-#wilcox.test# Calculate the DiD Interaction Term ------------------------------------------------------------------------------
+# Calculate the DiD Interaction Term ------------------------------------------------------------------------------
 
 data <- data %>%
   mutate(interaction = time * treatment_variable)
@@ -585,11 +404,28 @@ data <- data %>%
 
 # Run the Regression ----------------------------------------------------------------------------------------------
 
-model <- glm(outcome_variable ~ time + treatment_variable + interaction, data = data, family = "binomial")
+logit_model <- glm(outcome_variable ~ time + treatment_variable + interaction, data = data, family = "binomial")
 summary(model)
 
-# library(MASS)
-# model <- polr(outcome_variable ~ time + treatment_variable + interaction, data = data, method = "logistic")
-# summary(model)
 
+ordered_logit_model <- polr(outcome_variable ~ time + treatment_variable + interaction, data = data, method = "logistic")
+summary(model)
+
+
+# Robustness Checks -----------------------------------------------------------------------------------------------
+
+# 1. Multinomial Logit Model
+
+library(nnet)
+mnl_model <- multinom(outcome_variable ~ time + treatment_variable + interaction, data = data)
+summary(mnl_model)
+
+# 2. Parallel Trends Assumption Check
+
+# data$placebo_time <- ifelse(data$time < actual_treatment_time, 1, 0)
+# placebo_model <- glm(outcome_variable ~ placebo_time * treatment_variable, 
+#                      family = "binomial", data = data)
+# summary(placebo_model)
+
+# 3. Heterogeneous Treatment Effects
 
