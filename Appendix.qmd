@@ -1,3 +1,14 @@
+---
+title: "R Script"
+format: docx
+editor: visual
+---
+
+The following R Script was used for the calcutations in this research paper:
+
+```{r}
+#| eval: false
+
 # Load Packages --------------------------------------------------------------------------------------------------
 
 library(tidyverse)
@@ -376,5 +387,9 @@ ggplot(data, aes(x = outcome_variable, fill = as.factor(time))) +
 
 
 ggsave("output/outcome_distribution_before_and_after.png")
+
+
+
+```
 
 
